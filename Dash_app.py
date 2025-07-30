@@ -3,12 +3,6 @@ import pandas as pd
 import datetime
 import altair as alt
 
-import matplotlib.pyplot as plt
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-import tempfile
-import os
-
 st.set_page_config(layout="wide")
 st.title("Monthly Report Generator")
 
