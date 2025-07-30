@@ -3,6 +3,32 @@ import pandas as pd
 import datetime
 import altair as alt
 
+st.markdown("""
+    <style>
+    .refresh-button {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 100;
+    }
+    </style>
+    <div class="refresh-button">
+        <form action="" method="get">
+            <button type="submit"> Refresh</button>
+        </form>
+    </div>
+""", unsafe_allow_html=True)
+
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .css-1dp5vir {display: none;} 
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 st.set_page_config(layout="wide")
 st.title("Monthly Report Generator")
 
