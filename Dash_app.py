@@ -30,10 +30,23 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.set_page_config(layout="wide")
-st.title("Monthly Report Generator")
+st.title("LCL Report Generator")
 
-uploaded_files = st.file_uploader("Upload Excel files", accept_multiple_files=True, type=["xlsx"])
-time_unit = st.selectbox("View By", ["Weekly", "Monthly", "Quarterly"])
+st.markdown("""
+<div style='padding: 1rem; border-radius: 0.5rem; background-color: #F0F7F6;'>
+  <h3 style='color: #225560;'>👋 欢迎使用LCL报表生成器</h3>
+  <p style='font-size:16px; color:#444;'>
+    本工具帮助您按 <b>周 / 月 / 季度</b> 维度分析 <b>TEU 运量</b> 与 <b>分成利润</b>，
+    快速生成清晰的图表，追踪各条路线的运营表现。
+  </p>
+  <p style='font-size:15px; color:#444; margin-top:1em;'>
+    👉 上传盈利表格时请注意标题需要包含<b>rail</b>(不用区分大小写)。
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
+uploaded_files = st.file_uploader("📤 上传表格", accept_multiple_files=True, type=["xlsx"])
+time_unit = st.selectbox("View by", ["Weekly", "Monthly", "Quarterly"])
 if time_unit == "Weekly":
     time_col = "weeknum"
 elif time_unit == "Monthly":
@@ -75,8 +88,6 @@ if uploaded_files:
     status_placeholder.empty()
 
     df = pd.concat(dfs, ignore_index=True)
-    #df["weeknum"] = df["weeknum"].astype(str)
-    #df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
     df = df.sort_values(by=["route", time_col])
 
     if loss_dfs:
