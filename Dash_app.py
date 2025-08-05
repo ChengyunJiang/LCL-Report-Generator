@@ -33,6 +33,13 @@ st.set_page_config(layout="wide")
 st.title("Monthly Report Generator")
 
 uploaded_files = st.file_uploader("Upload Excel files", accept_multiple_files=True, type=["xlsx"])
+time_unit = st.selectbox("View By", ["Weekly", "Monthly", "Quarterly"])
+if time_unit == "Weekly":
+    time_col = "weeknum"
+elif time_unit == "Monthly":
+    time_col = "month"
+else:
+    time_col = "quarter"
 
 if uploaded_files:
     status_placeholder = st.empty()
@@ -57,67 +64,76 @@ if uploaded_files:
                 if df.dropna(how='all').empty:
                     continue
                 df["route"] = sheet_name 
+                if "WEEKNUM" in df.columns:
+                    df = df.drop(columns=["WEEKNUM"])
                 df["ETD"] = pd.to_datetime(df["ETD"], errors="coerce") 
                 df["weeknum"] = df["ETD"].dt.strftime("%U").astype(float).astype("Int64") + 1
+                df["month"] = df["ETD"].dt.to_period("M").astype(str)
+                df["quarter"] = df["ETD"].dt.to_period("Q").astype(str)
+                df = df.dropna(subset=["weeknum", "month", "quarter"], how="any")
                 dfs.append(df)
-
     status_placeholder.empty()
 
     df = pd.concat(dfs, ignore_index=True)
-    df["weeknum"] = df["weeknum"].astype(str)
-    # 合并所有盈亏表
+    #df["weeknum"] = df["weeknum"].astype(str)
+    #df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
+    df = df.sort_values(by=["route", time_col])
+
     if loss_dfs:
         loss_df = pd.concat(loss_dfs, ignore_index=True)
         df = pd.merge(df, loss_df, on="MMSCN", how="left")
 
     status_placeholder.empty()
-    cbm = df.groupby(["route", "weeknum"], as_index=False)[["Chrgb CBM"]].sum()
-    with st.expander("📋 Data Uploaded"):
-        st.dataframe(df.drop(columns=["Type of packaging"]))
+    cbm = df.groupby(["route", time_col], as_index=False)[["Chrgb CBM"]].sum()
 
-    profit_summary = df.groupby(["route", "weeknum"], as_index=False)["Shared_Profit"].sum()
-    profit_summary["color"] = profit_summary["Shared_Profit"].apply(lambda x: "#CA001D" if x < 0 else "#498684")
+    if "Shared_Profit" in df.columns:
+        profit_summary = df.groupby(["route", time_col], as_index=False)["Shared_Profit"].sum()
+        profit_summary = profit_summary.sort_values(time_col)
+        profit_summary["color"] = profit_summary["Shared_Profit"].apply(lambda x: "#CA001D" if x < 0 else "#498684")
 
-
-    unique_counts = df.drop_duplicates(subset=["route", "Containerno", "ETD", "weeknum"])
-    weekly_unique_counts = unique_counts.groupby(["route","weeknum"]).size().reset_index(name="FEU")
+    unique_counts = df.drop_duplicates(subset=["route", "Containerno", "ETD", time_col])
+    weekly_unique_counts = unique_counts.groupby(["route", time_col]).size().reset_index(name="FEU")
     total_unique_pairs = weekly_unique_counts.sum()
 
-    summary = pd.merge(cbm, weekly_unique_counts, on=["route","weeknum"], how="outer")
+    summary = pd.merge(cbm, weekly_unique_counts, on=["route",time_col], how="outer")
     summary["TEU"] = summary["FEU"]*2
     summary["AVG L/D"] = summary["Chrgb CBM"]/summary["FEU"]/76.3*100
-    summary = summary.sort_values(["route", "weeknum"])
+    summary = summary.sort_values(["route"])
 
-    tab1, tab2 = st.tabs(["Charts", "Pies"])
+    tab1, tab2, tab3 = st.tabs(["Charts", "Profits", "Period-over-Period"])
     with tab1:
-        selected_route = st.selectbox("📍 Select a Route", ["ALL"] + sorted(summary["route"].dropna().unique()))
+        selected_route = st.selectbox("📍 Select a Route", ["ALL"] + sorted(summary["route"].dropna().unique()), key = "tab1")
+        if time_col == "month":
+            teu_range = 50
+            cbm_range = 1000
+        elif time_col == "quarter":
+            teu_range = 100
+            cbm_range = 3000
+        else:
+            teu_range = 20
+            cbm_range = 500
         if selected_route == "ALL":
             charts = []
             for route in summary["route"].dropna().unique():
                 route_data = summary[summary["route"] == route]
                 profit_data = profit_summary[profit_summary["route"] == route]
-                # TEU chart
+#-------------# TEU chart####################################################################################################################################################################
                 teu_chart = alt.Chart(route_data).mark_bar(color="#498684").encode(
-                    x=alt.X("weeknum:O", title="Week Number"),
-                    y=alt.Y("TEU:Q", title=""),
-                    tooltip=["weeknum", "TEU"]
+                    x=alt.X(f"{time_col}:O", title=""),
+                    y=alt.Y("TEU:Q", title="", scale=alt.Scale(domain=[0, teu_range])),
+                    tooltip=[time_col, "TEU"]
                 ).properties(
                     title=alt.TitleParams(text=f"Vol(TEU) - {route}", fontSize=20, fontWeight="bold", anchor="start", offset=10),
-                    width=200, height=300
-                )
+                    width=200, height=300)
                 total_teu = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
                     text=f"TTL {route_data['TEU'].sum():.0f} TEU",
-                    color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30
-                ).encode(x=alt.value(0), y=alt.value(0))
-                teu_text = alt.Chart(route_data).mark_text(
-                    color="#498684", align="center", baseline="bottom", dy=-5, fontSize=12
-                ).encode(x="weeknum:O", y="TEU:Q", text=alt.Text("TEU:Q"))
+                    color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30).encode(x=alt.value(0), y=alt.value(0))
 
-                # CBM chart
+#-------------# CBM chart####################################################################################################################################################################
                 cbm_chart = alt.Chart(route_data).mark_bar(color="#498684").encode(
-                    x=alt.X("weeknum:O", title="Week Number"),
-                    y=alt.Y("Chrgb CBM:Q", title=""),
-                    tooltip=["weeknum", "Chrgb CBM"]
+                    x=alt.X(f"{time_col}:O", title=""),
+                    y=alt.Y("Chrgb CBM:Q", title="", scale=alt.Scale(domain=[0, cbm_range])),
+                    tooltip=[time_col, "Chrgb CBM"]
                 ).properties(
                     title=alt.TitleParams(text=f"Vol(C.CBM) - {route}", fontSize=20, fontWeight="bold", anchor="start", offset=10),
                     width=200, height=300
@@ -127,21 +143,21 @@ if uploaded_files:
                     color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30
                 ).encode(x=alt.value(0), y=alt.value(0))
                 cbm_text = alt.Chart(route_data).mark_text(
-                    color="#498684", align="center", baseline="bottom", dy=-5, fontSize=12
-                ).encode(x="weeknum:O", y="Chrgb CBM:Q", text=alt.Text("Chrgb CBM:Q", format=".1f"))
+                    color="#498684", align="center", baseline="bottom", dy=-5, fontSize=8
+                ).encode(x=f"{time_col}:O", y="Chrgb CBM:Q", text=alt.Text("Chrgb CBM:Q"))
 
-                # LD chart
+#--------------#LD chart####################################################################################################################################################################
                 avg_ld = route_data["AVG L/D"].mean()
                 ld_chart = alt.Chart(route_data).mark_line(color="#498684").encode(
-                    x=alt.X("weeknum:O", title="Week Number"),
-                    y=alt.Y("AVG L/D:Q", title=""),
-                    tooltip=["weeknum", "AVG L/D"]
+                    x=alt.X(f"{time_col}:O", title=""),
+                    y=alt.Y("AVG L/D:Q", title="", scale=alt.Scale(domain=[0, 100])),
+                    tooltip=[time_col, "AVG L/D"]
                 ).properties(
                     title=alt.TitleParams(text=f"LD(%) - {route}", fontSize=20, fontWeight="bold", anchor="start", offset=10),
                     width=200, height=300
                 )
                 ld_points = alt.Chart(route_data).mark_point(color="#498684", filled=True, size=80).encode(
-                    x="weeknum:O", y="AVG L/D:Q", tooltip=["weeknum", "AVG L/D"]
+                    x=f"{time_col}:O", y="AVG L/D:Q", tooltip=[time_col, "AVG L/D"]
                 )
                 avg_line = alt.Chart(pd.DataFrame({"y": [avg_ld]})).mark_rule(
                     color="#E4BDC2", strokeWidth=2).encode(y="y:Q")
@@ -149,47 +165,24 @@ if uploaded_files:
                     text=f"AVG {avg_ld:.0f} %",
                     color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30
                 ).encode(x=alt.value(0), y=alt.value(0))
-
-                if profit_data is not None:
-                    profit_chart = alt.Chart(profit_data).mark_bar().encode(
-                        x=alt.X("weeknum:N", title="Week Number"),
-                        y=alt.Y("Shared_Profit:Q", title="Shared_Profit"),
-                        color=alt.Color("color:N", scale=None, legend=None),
-                        tooltip=["route", "weeknum", "Shared_Profit"]
-                    ).properties(
-                        width=200,
-                        height=300,
-                        title="Weekly Shared Profit"
-                    )
-                    total_profit = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
-                        text=f"TTL {profit_data['Shared_Profit'].sum():.0f} USD",
-                        color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30
-                        ).encode(x=alt.value(0), y=alt.value(0))
-                    route_charts = alt.vconcat(
-                        teu_chart + total_teu + teu_text,
-                        cbm_chart + total_cbm + cbm_text,
-                        ld_chart + ld_points + avg_line + avg_text,
-                        profit_chart + total_profit
-                    ).resolve_scale(y='independent')
-                else:
-                    route_charts = alt.vconcat(
-                        teu_chart + total_teu + teu_text,
-                        cbm_chart + total_cbm + cbm_text,
-                        ld_chart + ld_points + avg_line + avg_text
-                    ).resolve_scale(y='independent')
+                route_charts = alt.vconcat(
+                    teu_chart + total_teu,
+                    cbm_chart + total_cbm,
+                    ld_chart + ld_points + avg_line + avg_text
+                ).resolve_scale(y='independent')
                 charts.append(route_charts)
             full_chart = alt.hconcat(*charts)
         else:
             data = summary[summary["route"] == selected_route]
             profit_data = profit_summary[profit_summary["route"] == selected_route]
-#-------TEU##################################################################################################################################
+#-----------TEU##################################################################################################################################
             teu_chart = alt.Chart(data).mark_bar(color = "#498684").encode(
-                x=alt.X("weeknum:O", title="Week Number"),
-                y=alt.Y("TEU:Q", title=""),
-                tooltip=["weeknum", "TEU"]
+                x=alt.X(f"{time_col}:O", title="", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("TEU:Q", title="", scale=alt.Scale(domain=[0, teu_range])),
+                tooltip=[time_col, "TEU"]
                 ).properties(
                 title=alt.TitleParams(text="Vol(TEU)", fontSize=20, fontWeight="bold", anchor="start", offset=10),
-                width=200,
+                width=600,
                 height=300
                 )
             total_teu = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
@@ -208,14 +201,14 @@ if uploaded_files:
                 baseline="bottom",
                 dy=-5,
                 fontSize=12).encode(
-                x="weeknum:O",
+                x=f"{time_col}:O",
                 y="TEU:Q",
                 text=alt.Text("TEU:Q"))
     #-------CBM##################################################################################################################################
             cbm_chart = alt.Chart(data).mark_bar(color = "#498684").encode(
-                x=alt.X("weeknum:O", title="Week Number"),
-                y=alt.Y("Chrgb CBM:Q", title=""),
-                tooltip=["weeknum", "Chrgb CBM"]
+                x=alt.X(f"{time_col}:O", title="", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("Chrgb CBM:Q", title="", scale=alt.Scale(domain=[0, cbm_range])),
+                tooltip=[time_col, "Chrgb CBM"]
                 ).properties(
                 title=alt.TitleParams(
             text="Vol(C.CBM)",
@@ -224,7 +217,7 @@ if uploaded_files:
             anchor="start",
             offset=10
         ),
-                width=200,
+                width=600,
                 height=300
                 )
             total_cbm = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
@@ -243,23 +236,23 @@ if uploaded_files:
                 baseline="bottom",
                 dy=-5,
                 fontSize=12).encode(
-                x="weeknum:O",
+                x=f"{time_col}:O",
                 y="Chrgb CBM:Q",
                 text=alt.Text("Chrgb CBM:Q", format=".1f"))
 
     #-------AVG L/D##################################################################################################################################
             avg_ld = data["AVG L/D"].mean()
             ld_chart = alt.Chart(data).mark_line(color = "#498684").encode(
-                x=alt.X("weeknum:O", title="Week Number"),
-                y=alt.Y("AVG L/D:Q", title=""),
-                tooltip=["weeknum", "AVG L/D"]).properties(
+                x=alt.X(f"{time_col}:O", title="", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("AVG L/D:Q", title="", scale=alt.Scale(domain=[0, 100])),
+                tooltip=[time_col, "AVG L/D"]).properties(
                 title=alt.TitleParams(text="LD(%)", fontSize=20,fontWeight="bold",anchor="start",offset=10),
-                width=200,
+                width=600,
                 height=300)
             ld_points = alt.Chart(data).mark_point(color="#498684", filled=True, size=80).encode(
-                x="weeknum:O",
+                x=f"{time_col}:O",
                 y="AVG L/D:Q",
-                tooltip=["weeknum", "AVG L/D"])
+                tooltip=[time_col, "AVG L/D"])
             avg_line = alt.Chart(pd.DataFrame({"y": [avg_ld]})).mark_rule(
                 color="#E4BDC2", strokeWidth=2).encode(y="y:Q")
             # avg_text = alt.Chart(pd.DataFrame({"y": [avg_ld]})).mark_text(
@@ -275,46 +268,19 @@ if uploaded_files:
             ).encode(
                 x=alt.value(0),
                 y=alt.value(0))
-            
-            if profit_data is not None:
-                profit_chart = alt.Chart(profit_data).mark_bar().encode(
-                    x=alt.X("weeknum:N", title="Week Number"),
-                    y=alt.Y("Shared_Profit:Q", title="Shared_Profit"),
-                    color=alt.Color("color:N", scale=None, legend=None),
-                    tooltip=["route", "weeknum", "Shared_Profit"]
-                ).properties(
-                    width=200,
-                    height=300,
-                    title="Weekly Shared Profit"
-                )
-                total_profit = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
-                        text=f"TTL {profit_data['Shared_Profit'].sum():.0f} USD",
-                        color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30
-                        ).encode(x=alt.value(0), y=alt.value(0))
-                full_chart = alt.vconcat(
+    ##################################################################################################################################
+            full_chart = alt.vconcat(
                 teu_chart + total_teu + teu_text,
                 cbm_chart + cbm_text + total_cbm,
-                ld_chart + ld_points + avg_line + avg_text,
-                profit_chart + total_profit).resolve_scale(
+                ld_chart + ld_points + avg_line + avg_text).resolve_scale(
                     y='independent').properties(
                     title=f"{selected_route}").configure_title( 
                     fontSize=20,
                     color="#498684",
                     anchor='start')
-            else:
-    ##################################################################################################################################
-                full_chart = alt.vconcat(
-                    teu_chart + total_teu + teu_text,
-                    cbm_chart + cbm_text + total_cbm,
-                    ld_chart + ld_points + avg_line + avg_text).resolve_scale(
-                        y='independent').properties(
-                        title=f"{selected_route}").configure_title( 
-                        fontSize=20,
-                        color="#498684",
-                        anchor='start')
         st.altair_chart(full_chart, use_container_width=True)
-        with st.expander("📋 View raw data"):
-            st.dataframe(profit_data)
+        # with st.expander("📋 View raw data"):
+        #     st.dataframe(route_data)
             
 
     route_summary = summary.copy()
@@ -324,36 +290,141 @@ if uploaded_files:
         "AVG L/D": "mean"
     })
 
-    def make_pie_chart(column, title, format_str):
-        chart = alt.Chart(agg_summary).mark_arc(innerRadius=50).encode(
-            theta=alt.Theta(f"{column}:Q"),
-            color=alt.Color("route:N", legend=alt.Legend(title="Route")),
-            tooltip=["route", column]
-        ).properties(width=250, height=250, title=title)
-        return chart
+    def make_profit_chart(df, title, time_col):
+        base = alt.Chart(df).encode(x=alt.X(f"{time_col}:O", title="", axis=alt.Axis(labelAngle=0)))
 
+        bars = base.mark_bar().encode(
+            y=alt.Y("Shared_Profit:Q", axis=alt.Axis(title="USD", titleAngle=0, titleFontSize=14,titleAnchor="start",titleY=-5)),
+            color=alt.Color("color:N", scale=None, legend=None),
+            tooltip=["route", time_col, "Shared_Profit"],
+        )
+
+        pos_text = (
+        base.mark_text(
+            dy=-5,           
+            align="center",
+            baseline="bottom", 
+            fontSize=12,
+            color="#498684",
+        )
+        .encode(
+            y=alt.Y("Shared_Profit:Q"),
+            text=alt.Text("Shared_Profit:Q", format=".0f"),
+        )
+        .transform_filter(alt.datum.Shared_Profit >= 0)
+    )
+
+        neg_text = (
+            base.mark_text(
+                dy=5,            
+                align="center",
+                baseline="top",   
+                fontSize=12,
+                color="#CA001D",
+            )
+            .encode(
+                y=alt.Y("Shared_Profit:Q"),
+                text=alt.Text("Shared_Profit:Q", format=".0f"),
+            )
+            .transform_filter(alt.datum.Shared_Profit < 0)
+        )
+
+        layered = alt.layer(bars, pos_text, neg_text).properties(
+            width=600,
+            height=150,
+            title=alt.TitleParams(
+                text=title, fontSize=20, color="#498684", anchor="start", offset=10
+            ),
+        ).resolve_scale(y="shared") 
+        return layered
 
     with tab2:
-        st.subheader("Route Share with Value Labels")
-        pie_teu = make_pie_chart("TEU", "TEU Share", "f")
-        pie_cbm = make_pie_chart("Chrgb CBM", "CBM Share", ".1f")
-        pie_ld = make_pie_chart("AVG L/D", "Load Rate Share", ".1f")
-        st.altair_chart(pie_teu | pie_cbm | pie_ld, use_container_width=False)
+        profit_route = st.selectbox(
+            "📍 Select a Route",
+            ["ALL"] + sorted(summary["route"].dropna().unique()),
+            key="tab2")
+        full_chart = None
+        if profit_route == "ALL":
+            charts = []
+            for route in sorted(summary["route"].dropna().unique()):
+                profit_data = profit_summary[profit_summary["route"] == route]
+                if profit_data.empty:
+                    continue
+                if profit_data["Shared_Profit"].dropna().abs().max() == 0:
+                    continue
+                charts.append(make_profit_chart(profit_data, route, time_col))
+            if charts:
+                full_chart = (alt.vconcat(*charts).resolve_scale(y="independent"))
+            else:
+                st.warning("No valid charts to display.")
+        else:
+            profit_data = profit_summary[profit_summary["route"] == profit_route]
+            if not profit_data.empty:
+                full_chart = make_profit_chart(profit_data, profit_route, time_col)
+            else:
+                st.info(f"This route ({profit_route}) does not have the profit data.")
+        if full_chart is not None:
+            st.altair_chart(full_chart, use_container_width=True)
+    
+    def prepare_weekly_profit(profit_summary, route, time_col):
+        df = profit_summary.copy()
+        if route != "ALL":
+            df = df[df["route"] == route]
+        if time_col == "weeknum":
+            df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
+        df = df.dropna(subset=[time_col])
+        df["Shared_Profit"] = pd.to_numeric(df["Shared_Profit"], errors="coerce").fillna(0)
+        df = df.groupby(time_col, as_index=False)["Shared_Profit"].sum()
+        return df.sort_values(time_col)
 
-        # bar_chart = alt.Chart(agg_summary).mark_bar(color="#ca001d").encode(
-        #     x=alt.X("route:N", sort='-y', title="Route"),
-        #     y=alt.Y("TEU:Q", title="Total TEU"),
-        #     tooltip=["route", "TEU"]
-        # ).properties(width=600, height=400)
+    def compute_wow(weekly, time_col):
+        weekly = weekly.sort_values(time_col).copy()
+        weekly["wow_pct"] = weekly["Shared_Profit"].pct_change() 
+        return weekly 
+    
+    def make_wow_chart(weekly, time_col):
+        time_label = {
+            "weeknum": "Week-over-Week",
+            "month": "Month-over-Month",
+            "quarter": "Quarter-over-Quarter"
+            }.get(time_col, "Period-over-Period")
+        base = alt.Chart(weekly)
+        bars = base.mark_bar().encode(
+            x=alt.X(f"{time_col}:O", title=time_label, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("wow_pct:Q", title=f"{time_label} % Change", axis=alt.Axis(format=".0%")),
+            color=alt.condition(
+                alt.datum.wow_pct >= 0,
+                alt.value("#2ca02c"),
+                alt.value("#d62728"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{time_col}:O", title=""),
+                alt.Tooltip("Shared_Profit:Q", title="Profit", format=","),
+                alt.Tooltip("wow_pct:Q", title="Change", format=".1%")
+            ],
+        )
+        zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4,4], color="gray").encode(
+            y=alt.Y("y:Q")
+        )
+        labels = (
+            base.mark_text(dy=-5, align="center", baseline="bottom", fontSize=11)
+            .encode(
+                x=alt.X(f"{time_col}:O", sort=alt.EncodingSortField(field = time_col, order="ascending")),
+                y=alt.Y("wow_pct:Q"),
+                text=alt.Text("wow_pct:Q", format=".1%"),
+            )
+            .transform_filter(alt.datum.wow_pct != None)
+        )
+        return (bars + zero + labels).properties(
+            title="",
+            width=700,
+            height=250,
+        )
 
-        # text = alt.Chart(agg_summary).mark_text(
-        #     align='center', baseline='bottom', dy=-5
-        # ).encode(
-        #     x="route:N",
-        #     y="TEU:Q",
-        #     text=alt.Text("TEU:Q", format=".0f")
-        # )
-
-        # st.altair_chart(bar_chart + text, use_container_width=True)
-        with st.expander("📋 View raw data"):
-            st.dataframe(agg_summary)
+    with tab3:  
+        weekly = prepare_weekly_profit(profit_summary, profit_route, time_col) 
+        if weekly.empty:
+            st.info("No data to show WoW.")
+        else:
+            wow_df = compute_wow(weekly, time_col)
+            st.altair_chart(make_wow_chart(wow_df, time_col), use_container_width=True)
