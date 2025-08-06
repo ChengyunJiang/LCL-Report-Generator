@@ -40,7 +40,7 @@ st.markdown("""
     快速生成清晰的图表，追踪各条路线的运营表现。
   </p>
   <p style='font-size:15px; color:#444; margin-top:1em;'>
-    👉 上传盈利表格时请注意标题需要包含<b>rail</b>(不用区分大小写)。
+    👉 上传盈利表格时请注意标题需要包含<b>Rail</b>(不用区分大小写)。
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -127,7 +127,8 @@ if uploaded_files:
             charts = []
             for route in summary["route"].dropna().unique():
                 route_data = summary[summary["route"] == route]
-                profit_data = profit_summary[profit_summary["route"] == route]
+                if 'profit_summary' in locals() and not profit_summary.empty:
+                    profit_data = profit_summary[profit_summary["route"] == route]
 #-------------# TEU chart####################################################################################################################################################################
                 teu_chart = alt.Chart(route_data).mark_bar(color="#498684").encode(
                     x=alt.X(f"{time_col}:O", title=""),
@@ -185,7 +186,8 @@ if uploaded_files:
             full_chart = alt.hconcat(*charts)
         else:
             data = summary[summary["route"] == selected_route]
-            profit_data = profit_summary[profit_summary["route"] == selected_route]
+            if 'profit_summary' in locals() and not profit_summary.empty:
+                profit_data = profit_summary[profit_summary["route"] == selected_route]
 #-----------TEU##################################################################################################################################
             teu_chart = alt.Chart(data).mark_bar(color = "#498684").encode(
                 x=alt.X(f"{time_col}:O", title="", axis=alt.Axis(labelAngle=0)),
@@ -197,15 +199,8 @@ if uploaded_files:
                 height=300
                 )
             total_teu = alt.Chart(pd.DataFrame({"x": [0], "y": [0]})).mark_text(
-                text=f"TTL {data["TEU"].sum():.0f} TEU",
-                color="#CA001D",
-                fontSize=20,
-                fontWeight="bold",
-                align="center",
-                dy=-30  # 上移
-            ).encode(
-                x=alt.value(0),
-                y=alt.value(0))
+                    text=f"TTL {data['TEU'].sum():.0f} TEU",
+                    color="#CA001D", fontSize=20, fontWeight="bold", align="center", dy=-30).encode(x=alt.value(0), y=alt.value(0))
             teu_text = alt.Chart(data).mark_text(
                 color = "#498684",
                 align="center",
@@ -290,8 +285,13 @@ if uploaded_files:
                     color="#498684",
                     anchor='start')
         st.altair_chart(full_chart, use_container_width=True)
-        # with st.expander("📋 View raw data"):
-        #     st.dataframe(route_data)
+        with st.expander("📋 查看汇总数据(Raw Summary Data)"):
+            if selected_route == "ALL":
+                show_df = summary.sort_values(["route", time_col])
+            else:
+                show_df = summary[summary["route"] == selected_route].sort_values(time_col)
+            st.dataframe(show_df, use_container_width=True, height=500)
+
             
 
     route_summary = summary.copy()
@@ -350,32 +350,36 @@ if uploaded_files:
         return layered
 
     with tab2:
-        profit_route = st.selectbox(
-            "📍 Select a Route",
-            ["ALL"] + sorted(summary["route"].dropna().unique()),
-            key="tab2")
-        full_chart = None
-        if profit_route == "ALL":
-            charts = []
-            for route in sorted(summary["route"].dropna().unique()):
-                profit_data = profit_summary[profit_summary["route"] == route]
-                if profit_data.empty:
-                    continue
-                if profit_data["Shared_Profit"].dropna().abs().max() == 0:
-                    continue
-                charts.append(make_profit_chart(profit_data, route, time_col))
-            if charts:
-                full_chart = (alt.vconcat(*charts).resolve_scale(y="independent"))
+        try:
+            profit_data = profit_summary[profit_summary["route"] == route]
+            profit_route = st.selectbox(
+                "📍 Select a Route",
+                ["ALL"] + sorted(summary["route"].dropna().unique()),
+                key="tab2")
+            full_chart = None
+            if profit_route == "ALL":
+                charts = []
+                for route in sorted(summary["route"].dropna().unique()):
+                    profit_data = profit_summary[profit_summary["route"] == route]
+                    if profit_data.empty:
+                        continue
+                    if profit_data["Shared_Profit"].dropna().abs().max() == 0:
+                        continue
+                    charts.append(make_profit_chart(profit_data, route, time_col))
+                if charts:
+                    full_chart = (alt.vconcat(*charts).resolve_scale(y="independent"))
+                else:
+                    st.warning("No valid charts to display.")
             else:
-                st.warning("No valid charts to display.")
-        else:
-            profit_data = profit_summary[profit_summary["route"] == profit_route]
-            if not profit_data.empty:
-                full_chart = make_profit_chart(profit_data, profit_route, time_col)
-            else:
-                st.info(f"This route ({profit_route}) does not have the profit data.")
-        if full_chart is not None:
-            st.altair_chart(full_chart, use_container_width=True)
+                profit_data = profit_summary[profit_summary["route"] == profit_route]
+                if not profit_data.empty:
+                    full_chart = make_profit_chart(profit_data, profit_route, time_col)
+                else:
+                    st.info(f"This route ({profit_route}) does not have the profit data.")
+            if full_chart is not None:
+                st.altair_chart(full_chart, use_container_width=True)
+        except Exception as e:
+            st.warning("⚠️ 当前未上传利润数据文件。")
     
     def prepare_weekly_profit(profit_summary, route, time_col):
         df = profit_summary.copy()
@@ -433,9 +437,13 @@ if uploaded_files:
         )
 
     with tab3:  
-        weekly = prepare_weekly_profit(profit_summary, profit_route, time_col) 
-        if weekly.empty:
-            st.info("No data to show WoW.")
-        else:
-            wow_df = compute_wow(weekly, time_col)
-            st.altair_chart(make_wow_chart(wow_df, time_col), use_container_width=True)
+        try:
+            profit_data = profit_summary[profit_summary["route"] == route]
+            weekly = prepare_weekly_profit(profit_summary, profit_route, time_col) 
+            if weekly.empty:
+                st.info("No data to show WoW.")
+            else:
+                wow_df = compute_wow(weekly, time_col)
+                st.altair_chart(make_wow_chart(wow_df, time_col), use_container_width=True)
+        except Exception as e:
+            st.warning("⚠️ 当前未上传利润数据文件。")
